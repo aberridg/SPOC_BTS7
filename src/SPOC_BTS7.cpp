@@ -131,6 +131,12 @@ void SPOC_BTS7::setPwm(byte channel, byte dutyCycle) {
 	}
 }
 
+bool isOpenLoad(byte channel) {
+	
+	
+	
+}
+
 
 SPOC_BTS7::~SPOC_BTS7() 
 {

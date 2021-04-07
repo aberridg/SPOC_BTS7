@@ -16,14 +16,16 @@ class SPOC_BTS7
 	
 	void begin();
 
-    int readCurrent(byte channel);
+    
     void channelOn(byte channel, bool highCurrent);
-    int channelOff(byte channel);
+    void channelOff(byte channel);
     void setPwm(byte channel, byte dutyCycle);
 
+	/* Todo */
     bool isOpenLoad();
     bool isShortCircuit();
     bool isLatchedOff();
+	int readCurrent(byte channel);
 
   private:
     byte _out0Pin, _out1Pin, _out2Pin, _out3Pin, _csnPin, _isPin;

@@ -1,0 +1,16 @@
+{
+  "name": "SPOC_BTS7",
+  "keywords": "Infineon, SPOC, BTS7, SPI",
+  "description": "Arduino/Teensy library for Infineon SPOC+2 SPI devices",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aberridg/SPOC_BTS7"
+  },
+  "version": "0.1",
+  "exclude": [
+    "*.png",
+    "*.zip"
+  ],
+  "frameworks": "arduino",
+  "platforms": "*"
+}
