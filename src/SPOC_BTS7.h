@@ -31,6 +31,8 @@ class SPOC_BTS7
     byte _out0Pin, _out1Pin, _out2Pin, _out3Pin, _csnPin, _isPin;
     uint8_t writeSPI(byte address, String description);
     byte _channelStatus;
+	
+	byte _stdDiagResponse;
 
 };
 

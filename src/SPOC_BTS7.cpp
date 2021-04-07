@@ -8,7 +8,6 @@
 
 SPOC_BTS7::SPOC_BTS7(byte out0Pin, byte out1Pin, byte out2Pin, byte out3Pin, byte csnPin, byte isPin)
 {
-
   _out0Pin = out0Pin;
   _out1Pin = out1Pin;
   _out2Pin = out2Pin;
@@ -34,7 +33,8 @@ void SPOC_BTS7::begin()
 	pinMode(_csnPin, OUTPUT);
 	digitalWrite(_csnPin, HIGH);
 	writeSPI(readStdDiag, "readStdDiag");
-	writeSPI(0b11110001, "set DCR.MUX");
+	// Response is always the result of executing the "next" command
+	_stdDiagResponse = writeSPI(0b11110001, "set DCR.MUX");
 	writeSPI(0b11100100, "set HWCR.COL to 1 for PWM");
 	writeSPI(readWrnDiag, "readWrnDiag");
 	_channelStatus = 0;	
@@ -72,10 +72,9 @@ uint8_t SPOC_BTS7::writeSPI(byte address, String description) {
 
 
 void SPOC_BTS7::channelOn(byte channel, bool highCurrent) {
-
-
-  switch (channel) {
 	bitSet(_channelStatus, channel);
+	switch (channel) {
+
 	case 0:		
 		digitalWrite(_out0Pin, HIGH);
 		break;
