@@ -43,7 +43,7 @@ void SPOC_BTS7::begin()
 
 
 
-// MSBFIRST, SPI_MODE_1 was working with previous versions, but not sure it's working now!
+// MSBFIRST, SPI_MODE_1 is required. Speed can be adjusted
 // speed set at 100000 for testing - works well with the 'scope set at 200ms
 SPISettings settingsA(100000, MSBFIRST, SPI_MODE1);
 uint8_t stat;
