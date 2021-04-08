@@ -31,13 +31,13 @@ void SPOC_BTS7::begin()
 	digitalWrite(_out3Pin, LOW);
 
 	pinMode(_csnPin, OUTPUT);
-	digitalWrite(_csnPin, HIGH);
+
 	writeSPI(readStdDiag, "readStdDiag");
 	// Response is always the result of executing the "next" command
 	_stdDiagResponse = writeSPI(0b11110001, "set DCR.MUX");
 	writeSPI(0b11100100, "set HWCR.COL to 1 for PWM");
 	writeSPI(readWrnDiag, "readWrnDiag");
-	_channelStatus = 0;	
+	_channelStatus = 0b10000000;	
 }
 
 
@@ -53,43 +53,51 @@ uint8_t SPOC_BTS7::writeSPI(byte address, String description) {
   SPI.beginTransaction(settingsA);
 
   digitalWrite(_csnPin, LOW);
-  delay(10);
+  delay(1);
   //stat = SPI.transfer(readStdDiag);
 
   stat = SPI.transfer(address);
   PRINTBIN(stat);
   Serial.println();
-  delay(10);
+  delay(1);
   digitalWrite(_csnPin, HIGH);
   Serial.print(description + " ");
   PRINTBIN(address);
   Serial.print(" ");
   SPI.endTransaction();
-  delay(10);
+  delay(1);
+  if (bitRead(stat, 6) == 0 && bitRead(stat, 7) == 0) {
+	  // we have a stdDiag message
+	  //Serial.print("stdiag response");
+	  //PRINTBIN(stat);
+	  _stdDiagResponse = stat;
+  }
   return stat;
 }
 
 
 
 void SPOC_BTS7::channelOn(byte channel, bool highCurrent) {
+	// todo - set high current/low current
 	bitSet(_channelStatus, channel);
+	setDcrMuxChannel(channel);
 	switch (channel) {
-
-	case 0:		
-		digitalWrite(_out0Pin, HIGH);
-		break;
-	case 1:		
-		digitalWrite(_out1Pin, HIGH);
-		break;
-	case 2:		
-		digitalWrite(_out2Pin, HIGH);
-		break;
-	case 3:		
-		digitalWrite(_out3Pin, HIGH);
-		break;
+		case 0:		
+			digitalWrite(_out0Pin, HIGH);
+			break;
+		case 1:		
+			digitalWrite(_out1Pin, HIGH);
+			break;
+		case 2:		
+			digitalWrite(_out2Pin, HIGH);
+			break;
+		case 3:		
+			digitalWrite(_out3Pin, HIGH);
+			break;
 	}
 
 	writeSPI(_channelStatus, "Channel" + String(channel) + " on");
+	writeSPI(0b00000000, "Read out");
 }
 
 void SPOC_BTS7::channelOff(byte channel) {
@@ -111,6 +119,37 @@ void SPOC_BTS7::channelOff(byte channel) {
 	}
 
 	writeSPI(_channelStatus, "Channel" + String(channel) + " off");
+	writeSPI(0b00000000, "Read out");
+	
+}
+
+byte SPOC_BTS7::getStdDiag() {
+	writeSPI(readWrnDiag, "readWrnDiag");
+	return writeSPI(readStdDiag, "readStdDiag");
+}
+
+void SPOC_BTS7::setDcrMuxChannel(byte channel) {
+	byte address = 0;
+	switch(channel) {
+		case 0:
+			address = 0b11110000;
+			break;
+		case 1:
+			address = 0b11110001;
+			break;
+		case 2:
+			address = 0b11110010;
+			break;
+		case 3:
+			address = 0b11110100;
+			break;		
+	}
+	
+	if (!address == _dcrMuxSetting) {
+		writeSPI(address, "set DCR.MUX channel " + String(channel));
+	}
+	// Store the current DCR mux settings so as to not bother setting them again if they haven't changed
+	_dcrMuxSetting = address;
 }
 
 void SPOC_BTS7::setPwm(byte channel, byte dutyCycle) {
@@ -130,10 +169,49 @@ void SPOC_BTS7::setPwm(byte channel, byte dutyCycle) {
 	}
 }
 
-bool isOpenLoad(byte channel) {
+bool SPOC_BTS7::isOpenLoad(byte olDetPin, byte channel) {
+	pinMode(olDetPin, OUTPUT);
+	digitalWrite(olDetPin, HIGH);
+	delay(1);
+	setDcrMuxChannel(channel);
+	getStdDiag();
+	digitalWrite(olDetPin, LOW);
+	//delay(1);
+	if (bitRead(_channelStatus, channel) == 0) {
+		// it's off
+		//SBM (bit 1) is 1 in stddiag if OL_DET is HIGH, opt is off and we do not have open load!
+		return !(bitRead(_stdDiagResponse, 1) == 1);
+	} else {
+		return (readCurrent(channel) < 5);
+	}
 	
+	return false;
+}
+
+
+bool SPOC_BTS7::isShortedToVs(byte olDetPin, byte channel) {
+	pinMode(olDetPin, OUTPUT);
+	digitalWrite(olDetPin, LOW);
+	delay(1);
+	setDcrMuxChannel(channel);
+	getStdDiag();
+	//delay(1);
+	if (bitRead(_channelStatus, channel) == 0) {
+		// it's off
+		//SBM (bit 1) is 1 in stddiag if OL_DET is HIGH, opt is off and we do not have open load!
+		return !(bitRead(_stdDiagResponse, 1) == 1);
+	} else {
+		return (readCurrent(channel) < 5);
+	}
+	digitalWrite(olDetPin, LOW);
 	
-	
+}
+
+// 5W bulb is 26, 10W is 50, therefore (approx) 21W is 65, 55W is 276 and 60W is 300
+int SPOC_BTS7::readCurrent(byte channel) {
+	setDcrMuxChannel(channel);
+	delay(1);
+	return analogRead(_isPin);	
 }
 
 
