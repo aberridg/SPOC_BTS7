@@ -53,19 +53,19 @@ uint8_t SPOC_BTS7::writeSPI(byte address, String description) {
   SPI.beginTransaction(settingsA);
 
   digitalWrite(_csnPin, LOW);
-  delay(1);
+  //delay(1);
   //stat = SPI.transfer(readStdDiag);
 
   stat = SPI.transfer(address);
   PRINTBIN(stat);
   Serial.println();
-  delay(1);
+  //delay(1);
   digitalWrite(_csnPin, HIGH);
   Serial.print(description + " ");
   PRINTBIN(address);
   Serial.print(" ");
   SPI.endTransaction();
-  delay(1);
+  //delay(1);
   if (bitRead(stat, 6) == 0 && bitRead(stat, 7) == 0) {
 	  // we have a stdDiag message
 	  //Serial.print("stdiag response");
@@ -172,7 +172,7 @@ void SPOC_BTS7::setPwm(byte channel, byte dutyCycle) {
 bool SPOC_BTS7::isOpenLoad(byte olDetPin, byte channel) {
 	pinMode(olDetPin, OUTPUT);
 	digitalWrite(olDetPin, HIGH);
-	delay(1);
+	//delay(1);
 	setDcrMuxChannel(channel);
 	getStdDiag();
 	digitalWrite(olDetPin, LOW);
@@ -192,7 +192,7 @@ bool SPOC_BTS7::isOpenLoad(byte olDetPin, byte channel) {
 bool SPOC_BTS7::isShortedToVs(byte olDetPin, byte channel) {
 	pinMode(olDetPin, OUTPUT);
 	digitalWrite(olDetPin, LOW);
-	delay(1);
+	//delay(1);
 	setDcrMuxChannel(channel);
 	getStdDiag();
 	//delay(1);
@@ -210,7 +210,7 @@ bool SPOC_BTS7::isShortedToVs(byte olDetPin, byte channel) {
 // 5W bulb is 26, 10W is 50, therefore (approx) 21W is 65, 55W is 276 and 60W is 300
 int SPOC_BTS7::readCurrent(byte channel) {
 	setDcrMuxChannel(channel);
-	delay(1);
+	//delay(1);
 	return analogRead(_isPin);	
 }
 
