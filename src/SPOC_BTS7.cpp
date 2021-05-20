@@ -31,12 +31,11 @@ void SPOC_BTS7::begin()
 	digitalWrite(_out3Pin, LOW);
 
 	pinMode(_csnPin, OUTPUT);
+	pinMode(_isPin, INPUT);
 
-	writeSPI(readStdDiag, "readStdDiag");
 	// Response is always the result of executing the "next" command
-	_stdDiagResponse = writeSPI(0b11110001, "set DCR.MUX");
+	writeSPI(0b11110001, "set DCR.MUX");
 	writeSPI(0b11100100, "set HWCR.COL to 1 for PWM");
-	writeSPI(readWrnDiag, "readWrnDiag");
 	_channelStatus = 0b10000000;	
 }
 
@@ -65,13 +64,6 @@ uint8_t SPOC_BTS7::writeSPI(byte address, String description) {
   PRINTBIN(address);
   Serial.print(" ");
   SPI.endTransaction();
-  //delay(1);
-  if (bitRead(stat, 6) == 0 && bitRead(stat, 7) == 0) {
-	  // we have a stdDiag message
-	  //Serial.print("stdiag response");
-	  //PRINTBIN(stat);
-	  _stdDiagResponse = stat;
-  }
   return stat;
 }
 
@@ -80,7 +72,18 @@ uint8_t SPOC_BTS7::writeSPI(byte address, String description) {
 void SPOC_BTS7::channelOn(byte channel, bool highCurrent) {
 	// todo - set high current/low current
 	bitSet(_channelStatus, channel);
-	setDcrMuxChannel(channel);
+	
+	// set KRC (KILIS range)
+	// todo: set SWR to 0
+	
+	
+	if (highCurrent) {
+		bitClear(_krcAddressSetting, channel);
+	} else {
+		bitSet(_krcAddressSetting, channel);
+	}
+	writeSPI(_krcAddressSetting, "Set KRC");
+	
 	switch (channel) {
 		case 0:		
 			digitalWrite(_out0Pin, HIGH);
@@ -123,33 +126,22 @@ void SPOC_BTS7::channelOff(byte channel) {
 	
 }
 
-byte SPOC_BTS7::getStdDiag() {
-	writeSPI(readWrnDiag, "readWrnDiag");
-	return writeSPI(readStdDiag, "readStdDiag");
+byte SPOC_BTS7::getStdDiag() {	
+	writeSPI(readStdDiag, "readStdDiag");
+	return writeSPI(readWrnDiag, "readWrnDiag");	
 }
 
 void SPOC_BTS7::setDcrMuxChannel(byte channel) {
-	byte address = 0;
-	switch(channel) {
-		case 0:
-			address = 0b11110000;
-			break;
-		case 1:
-			address = 0b11110001;
-			break;
-		case 2:
-			address = 0b11110010;
-			break;
-		case 3:
-			address = 0b11110100;
-			break;		
-	}
-	
+	byte address = 0b11110000 | channel;
 	if (!address == _dcrMuxSetting) {
 		writeSPI(address, "set DCR.MUX channel " + String(channel));
 	}
 	// Store the current DCR mux settings so as to not bother setting them again if they haven't changed
 	_dcrMuxSetting = address;
+}
+
+bool SPOC_BTS7::isChannelOn(byte channel) {
+	return bitRead(_channelStatus, channel);
 }
 
 void SPOC_BTS7::setPwm(byte channel, byte dutyCycle) {
@@ -170,22 +162,18 @@ void SPOC_BTS7::setPwm(byte channel, byte dutyCycle) {
 }
 
 bool SPOC_BTS7::isOpenLoad(byte olDetPin, byte channel) {
-	pinMode(olDetPin, OUTPUT);
-	digitalWrite(olDetPin, HIGH);
-	//delay(1);
-	setDcrMuxChannel(channel);
-	getStdDiag();
-	digitalWrite(olDetPin, LOW);
-	//delay(1);
-	if (bitRead(_channelStatus, channel) == 0) {
-		// it's off
-		//SBM (bit 1) is 1 in stddiag if OL_DET is HIGH, opt is off and we do not have open load!
-		return !(bitRead(_stdDiagResponse, 1) == 1);
+	if (isChannelOn(channel)) {
+		return readCurrent(channel) < 0.05;
 	} else {
-		return (readCurrent(channel) < 5);
+			
+		pinMode(olDetPin, OUTPUT);
+		digitalWrite(olDetPin, HIGH);	
+		
+		// SBM - switch bypass monitor
+		byte sbm = bitRead(getStdDiag(), 1);
+		digitalWrite(olDetPin, LOW);
+		return !sbm;
 	}
-	
-	return false;
 }
 
 
@@ -207,11 +195,48 @@ bool SPOC_BTS7::isShortedToVs(byte olDetPin, byte channel) {
 	
 }
 
-// 5W bulb is 26, 10W is 50, therefore (approx) 21W is 65, 55W is 276 and 60W is 300
-int SPOC_BTS7::readCurrent(byte channel) {
+/* Read the current of a channel. 
+ * Note that results are not very accurate when PWM is being used.
+ * This is because the current sense is sometimes performed when the channel is off. Can't 
+ * really check the "on" register for this and only read when it is on, as timings won't permit it!
+ */
+
+double SPOC_BTS7::readCurrent(byte channel) {
 	setDcrMuxChannel(channel);
-	//delay(1);
-	return analogRead(_isPin);	
+	//delay(20);
+	
+	// take 10 readings for an average. Need it when using PWM;
+	// todo - figure out a method of not needing a delay for this - don't want to introduce latency
+	double raw = 0; 
+	
+	for (byte i = 0; i <10; i++) {
+		raw += analogRead(_isPin);
+		delay(1);
+	}
+	
+	raw = raw/10;
+	double voltage = (raw / 1024.0) * 3.3;
+	Serial.println("Current sense voltage: " + String(voltage, 6));
+	// In low range KILIS mode. Channel 0 (65W)
+	//5W bulb draws approx 420mA and gives 0.24V from ADC
+	// Therefore 1mA, or 0.001A is 5.714e-04 V
+	// Therefore current (in Amps) = v / 5.71e-04 * 1000
+	// todo: high KILIS range!!!
+	double current = 0;
+	if (channel == 0 || channel == 3) { // 65W BTS72220-4ESA
+		// In low range KILIS mode. Channel 0 (65W)
+		// 5W bulb draws approx 420mA and gives 0.24V from ADC
+		// Therefore 1mA, or 0.001A is 5.714e-04 V
+		// Therefore current (in Amps) = v / 5.71e-04 * 1000
+		current = voltage / 0.5714;
+	} else {
+		// 42W channels, low range
+		// 5W bulb 0.52V from ADC
+		// 1A is 1.22767V
+		current = voltage / 1.22767;
+	}
+	
+	return current;	
 }
 
 

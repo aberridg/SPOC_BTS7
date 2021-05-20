@@ -25,10 +25,12 @@ class SPOC_BTS7
 	bool isOpenLoad(byte olDetPin, byte channel);
 	/* Todo */
     
+	bool isChannelOn(byte channel);
+	
     bool isShortCircuit(byte olDetPin, byte channel);
 	bool isShortedToVs(byte olDetPin, byte channel);
     bool isLatchedOff();
-	int readCurrent(byte channel);
+	double readCurrent(byte channel);
 
   private:
 	void setDcrMuxChannel(byte channel);
@@ -38,6 +40,7 @@ class SPOC_BTS7
 	
 	byte _stdDiagResponse;	
 	byte _dcrMuxSetting;
+	byte _krcAddressSetting = 0b11010000;
 
 };
 
