@@ -6,7 +6,7 @@
 
 
 
-SPOC_BTS7::SPOC_BTS7(byte out0Pin, byte out1Pin, byte out2Pin, byte out3Pin, byte csnPin, byte isPin)
+SPOC_BTS7::SPOC_BTS7(byte out0Pin, byte out1Pin, byte out2Pin, byte out3Pin, byte csnPin, byte isPin, byte olDetPin)
 {
   _out0Pin = out0Pin;
   _out1Pin = out1Pin;
@@ -14,6 +14,7 @@ SPOC_BTS7::SPOC_BTS7(byte out0Pin, byte out1Pin, byte out2Pin, byte out3Pin, byt
   _out3Pin = out3Pin;
   _csnPin = csnPin;
   _isPin = isPin;
+  _olDetPin = olDetPin;
 
 }
 
@@ -44,7 +45,8 @@ void SPOC_BTS7::begin()
 
 // MSBFIRST, SPI_MODE_1 is required. Speed can be adjusted
 // speed set at 100000 for testing - works well with the 'scope set at 200ms
-SPISettings settingsA(100000, MSBFIRST, SPI_MODE1);
+// 3Mhz seems too fast for reliable comms. 2Mhz works well and should be plenty fast enough
+SPISettings settingsA(2000000, MSBFIRST, SPI_MODE1);
 uint8_t stat;
 
 uint8_t SPOC_BTS7::writeSPI(byte address, String description) {
@@ -56,33 +58,69 @@ uint8_t SPOC_BTS7::writeSPI(byte address, String description) {
   //stat = SPI.transfer(readStdDiag);
 
   stat = SPI.transfer(address);
-  PRINTBIN(stat);
-  Serial.println();
+  if (debugMode) PRINTBIN(stat);
+  if (debugMode) Serial.println();
   //delay(1);
   digitalWrite(_csnPin, HIGH);
-  Serial.print(description + " ");
-  PRINTBIN(address);
-  Serial.print(" ");
+  if (debugMode) Serial.print(description + " ");
+  if (debugMode) PRINTBIN(address);
+  if (debugMode) Serial.print(" ");
   SPI.endTransaction();
   return stat;
 }
 
+void SPOC_BTS7::setChannels(byte channels, byte currentSettings) {	
+	for (int i = 0; i < 4 ; i++) {
+		if (bitRead(channels, i)) {
+			channelOn(i, bitRead(currentSettings, i));
+		} else {
+			channelOff(i);
+		}
+	}
+}
+
+void SPOC_BTS7::events() {
+	if (_sinceCheck < 25) return;
+	
+	// check the current channel every time this function is called	
+	if (isOpenLoad(_checkChannel)) {
+		bitSet(_openLoadStatus, _checkChannel);
+	} else {
+		bitClear(_openLoadStatus, _checkChannel);
+	}
+	if (isOverCurrent(_checkChannel)) {
+		bitSet(_overCurrentStatus, _checkChannel);
+	} else {
+		bitClear(_overCurrentStatus, _checkChannel);
+	}
+	if (isError(_checkChannel)) {
+		bitSet(_errorStatus, _checkChannel);
+	} else {
+		bitClear(_errorStatus, _checkChannel);
+	}
+	
+	_checkChannel = (_checkChannel++) % 4;
+	_sinceCheck = 0;
+}
 
 
-void SPOC_BTS7::channelOn(byte channel, bool highCurrent) {
-	// todo - set high current/low current
+void SPOC_BTS7::channelOn(byte channel, bool lowCurrent) {
 	bitSet(_channelStatus, channel);
 	
-	// set KRC (KILIS range)
-	// todo: set SWR to 0
+	// set DCR.SWR to 0 (so we can set KRC) and DCR.MUX to current sense verification mode
+	_dcrMuxSetting = 0b11110101;
+	writeSPI(_dcrMuxSetting, "DCR.SWR=0, current sense verification");
 	
-	
-	if (highCurrent) {
-		bitClear(_krcAddressSetting, channel);
-	} else {
+	// set KRC (KILIS range) and OCR (overcurrent range)
+	if (lowCurrent) {
 		bitSet(_krcAddressSetting, channel);
+		bitSet(_ocrSetting, channel);
+	} else {
+		bitClear(_krcAddressSetting, channel);
+		bitClear(_ocrSetting, channel);
 	}
-	writeSPI(_krcAddressSetting, "Set KRC");
+	writeSPI(_ocrSetting, "Set OCR - overcurrent");
+	writeSPI(_krcAddressSetting, "Set KRC - KILIS range");
 	
 	switch (channel) {
 		case 0:		
@@ -131,17 +169,28 @@ byte SPOC_BTS7::getStdDiag() {
 	return writeSPI(readWrnDiag, "readWrnDiag");	
 }
 
+byte SPOC_BTS7::getWrnDiag() {	
+	writeSPI(readWrnDiag, "readWrnDiag");
+	return writeSPI(readStdDiag, "readStdDiag");	
+}
+
+byte SPOC_BTS7::getErrDiag() {
+	writeSPI(readErrDiag, "readErrDiag");
+	return writeSPI(readStdDiag, "readStdDiag");	
+}
+
 void SPOC_BTS7::setDcrMuxChannel(byte channel) {
 	byte address = 0b11110000 | channel;
-	if (!address == _dcrMuxSetting) {
-		writeSPI(address, "set DCR.MUX channel " + String(channel));
-	}
-	// Store the current DCR mux settings so as to not bother setting them again if they haven't changed
+	writeSPI(address, "set DCR.MUX channel " + String(channel));	
 	_dcrMuxSetting = address;
 }
 
 bool SPOC_BTS7::isChannelOn(byte channel) {
 	return bitRead(_channelStatus, channel);
+}
+
+bool SPOC_BTS7::isError(byte channel) {
+	return bitRead(getErrDiag(), channel);
 }
 
 void SPOC_BTS7::setPwm(byte channel, byte dutyCycle) {
@@ -161,62 +210,63 @@ void SPOC_BTS7::setPwm(byte channel, byte dutyCycle) {
 	}
 }
 
-bool SPOC_BTS7::isOpenLoad(byte olDetPin, byte channel) {
+bool SPOC_BTS7::isOpenLoad(byte channel) {
 	if (isChannelOn(channel)) {
 		return readCurrent(channel) < 0.05;
 	} else {
 			
-		pinMode(olDetPin, OUTPUT);
-		digitalWrite(olDetPin, HIGH);	
+		pinMode(_olDetPin, OUTPUT);
+		digitalWrite(_olDetPin, HIGH);	
 		
 		// SBM - switch bypass monitor
 		byte sbm = bitRead(getStdDiag(), 1);
-		digitalWrite(olDetPin, LOW);
+		digitalWrite(_olDetPin, LOW);
 		return !sbm;
 	}
 }
 
-
-bool SPOC_BTS7::isShortedToVs(byte olDetPin, byte channel) {
-	pinMode(olDetPin, OUTPUT);
-	digitalWrite(olDetPin, LOW);
+// Note - can only detect if shorted to VS if channel is off!
+bool SPOC_BTS7::isShortedToVs(byte channel) {
+	pinMode(_olDetPin, OUTPUT);
+	digitalWrite(_olDetPin, LOW);
 	//delay(1);
 	setDcrMuxChannel(channel);
-	getStdDiag();
+	
 	//delay(1);
 	if (bitRead(_channelStatus, channel) == 0) {
 		// it's off
 		//SBM (bit 1) is 1 in stddiag if OL_DET is HIGH, opt is off and we do not have open load!
-		return !(bitRead(_stdDiagResponse, 1) == 1);
-	} else {
-		return (readCurrent(channel) < 5);
+		return !(bitRead(getStdDiag(), 1));
 	}
-	digitalWrite(olDetPin, LOW);
-	
+	return  false;
+}
+
+bool SPOC_BTS7::isOverCurrent(byte channel) {
+	_warningStatus = getWrnDiag();
+	return bitRead(_warningStatus, channel) || readCurrent(channel) > _overCurrentSettings[channel];
 }
 
 /* Read the current of a channel. 
  * Note that results are not very accurate when PWM is being used.
  * This is because the current sense is sometimes performed when the channel is off. Can't 
  * really check the "on" register for this and only read when it is on, as timings won't permit it!
+ * And this wouldn't work anyway as we need the average current
  */
 
 double SPOC_BTS7::readCurrent(byte channel) {
 	setDcrMuxChannel(channel);
-	//delay(20);
-	
-	// take 10 readings for an average. Need it when using PWM;
-	// todo - figure out a method of not needing a delay for this - don't want to introduce latency
-	double raw = 0; 
-	
-	for (byte i = 0; i <10; i++) {
-		raw += analogRead(_isPin);
-		delay(1);
+
+	double raw = analogRead(_isPin); 
+	// If we are using PWM for this channel, average several readings together...
+	if (_pwmBrightnesses[channel] < 255) {
+		for (byte i = 0; i < 19; i++) {
+			raw += analogRead(_isPin); 
+			delay(1);
+		}
+		raw = raw/20;
 	}
-	
-	raw = raw/10;
 	double voltage = (raw / 1024.0) * 3.3;
-	Serial.println("Current sense voltage: " + String(voltage, 6));
+	if (debugMode) Serial.println("Current sense voltage: " + String(voltage, 6));
 	// In low range KILIS mode. Channel 0 (65W)
 	//5W bulb draws approx 420mA and gives 0.24V from ADC
 	// Therefore 1mA, or 0.001A is 5.714e-04 V
@@ -237,6 +287,25 @@ double SPOC_BTS7::readCurrent(byte channel) {
 	}
 	
 	return current;	
+}
+
+void SPOC_BTS7::setSoftOverCurrentSettings(byte channel, byte currentAmps) {
+	_overCurrentSettings[channel] = currentAmps;
+}
+
+byte SPOC_BTS7::getAllChannelStatus() {
+	return _channelStatus;
+}
+byte SPOC_BTS7::getAllChannelOpenLoadStatus() {
+	return 	_openLoadStatus;
+	
+}
+byte SPOC_BTS7::getAllChannelOverCurrentStatus() {
+	return _overCurrentStatus;
+}
+
+byte SPOC_BTS7::getAllChannelErrorStatus() {
+	return _errorStatus;
 }
 
 
