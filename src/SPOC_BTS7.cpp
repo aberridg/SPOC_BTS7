@@ -214,7 +214,7 @@ bool SPOC_BTS7::isOpenLoad(byte channel) {
 	if (isChannelOn(channel)) {
 		return readCurrent(channel) < 0.05;
 	} else {
-			
+		setDcrMuxChannel(channel);
 		pinMode(_olDetPin, OUTPUT);
 		digitalWrite(_olDetPin, HIGH);	
 		
